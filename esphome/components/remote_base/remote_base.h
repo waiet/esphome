@@ -6,6 +6,7 @@
 #include "esphome/core/esphal.h"
 #include "esphome/core/automation.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/sensor/sensor.h"
 
 #ifdef ARDUINO_ARCH_ESP32
 #include <driver/rmt.h>
@@ -285,6 +286,24 @@ class RemoteReceiverBinarySensorBase : public binary_sensor::BinarySensor,
   }
 };
 
+class RemoteReceiverSensorBase : public sensor::Sensor,
+        public Component,
+        public RemoteReceiverListener {
+public:
+    explicit RemoteReceiverSensorBase() : Sensor() {}
+    void dump_config() override;
+    virtual bool matches(RemoteReceiveData src) = 0;
+    bool on_receive(RemoteReceiveData src) override {
+        if (this->matches(src)) {
+            this->publish_state(true);
+            yield();
+            this->publish_state(false);
+            return true;
+        }
+        return false;
+    }
+};
+
 template<typename T, typename D> class RemoteReceiverBinarySensor : public RemoteReceiverBinarySensorBase {
  public:
   RemoteReceiverBinarySensor() : RemoteReceiverBinarySensorBase() {}
@@ -301,6 +320,24 @@ template<typename T, typename D> class RemoteReceiverBinarySensor : public Remot
 
  protected:
   D data_;
+};
+
+template<typename T, typename D> class RemoteReceiverSensor : public RemoteReceiverSensorBase {
+public:
+    RemoteReceiverSensor() : RemoteReceiverSensorBase() {}
+
+protected:
+    bool matches(RemoteReceiveData src) override {
+        auto proto = T();
+        auto res = proto.decode(src);
+        return res.has_value() && *res == this->data_;
+    }
+
+public:
+    void set_data(D data) { data_ = data; }
+
+protected:
+    D data_;
 };
 
 template<typename T, typename D> class RemoteReceiverTrigger : public Trigger<D>, public RemoteReceiverListener {

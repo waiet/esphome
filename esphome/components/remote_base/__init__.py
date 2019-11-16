@@ -2,10 +2,12 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation
 from esphome.components import binary_sensor
+from esphome.components import sensor
 from esphome.const import CONF_DATA, CONF_TRIGGER_ID, CONF_NBITS, CONF_ADDRESS, \
     CONF_COMMAND, CONF_CODE, CONF_PULSE_LENGTH, CONF_SYNC, CONF_ZERO, CONF_ONE, CONF_INVERTED, \
     CONF_PROTOCOL, CONF_GROUP, CONF_DEVICE, CONF_STATE, CONF_CHANNEL, CONF_FAMILY, CONF_REPEAT, \
-    CONF_WAIT_TIME, CONF_TIMES, CONF_TYPE_ID, CONF_CARRIER_FREQUENCY
+    CONF_WAIT_TIME, CONF_TIMES, CONF_TYPE_ID, CONF_CARRIER_FREQUENCY, CONF_HUMIDITY, CONF_TEMPERATURE, \
+    ICON_THERMOMETER, UNIT_CELSIUS, ICON_WATER_PERCENT, UNIT_PERCENT
 from esphome.core import coroutine
 from esphome.py_compat import string_types, text_type
 from esphome.util import Registry, SimpleRegistry
@@ -20,6 +22,8 @@ RemoteProtocol = ns.class_('RemoteProtocol')
 RemoteReceiverListener = ns.class_('RemoteReceiverListener')
 RemoteReceiverBinarySensorBase = ns.class_('RemoteReceiverBinarySensorBase',
                                            binary_sensor.BinarySensor, cg.Component)
+RemoteReceiverSensorBase = ns.class_('RemoteReceiverServerBase',
+                                           sensor.Sensor, cg.Component)
 RemoteReceiverTrigger = ns.class_('RemoteReceiverTrigger', automation.Trigger,
                                   RemoteReceiverListener)
 RemoteTransmitterDumper = ns.class_('RemoteTransmitterDumper')
@@ -45,6 +49,9 @@ def register_listener(var, config):
 
 def register_binary_sensor(name, type, schema):
     return BINARY_SENSOR_REGISTRY.register(name, type, schema)
+
+def register_sensor(name, type, schema):
+    return SENSOR_REGISTRY.register(name, type, schema)
 
 
 def register_trigger(name, type, data_type):
@@ -124,16 +131,23 @@ def register_action(name, type_, schema):
 def declare_protocol(name):
     data = ns.struct('{}Data'.format(name))
     binary_sensor_ = ns.class_('{}BinarySensor'.format(name), RemoteReceiverBinarySensorBase)
+    sensor_ = ns.class_('{}Sensor'.format(name), RemoteReceiverSensorBase)
     trigger = ns.class_('{}Trigger'.format(name), RemoteReceiverTrigger)
     action = ns.class_('{}Action'.format(name), RemoteTransmitterActionBase)
     dumper = ns.class_('{}Dumper'.format(name), RemoteTransmitterDumper)
-    return data, binary_sensor_, trigger, action, dumper
+    return data, binary_sensor_, sensor_, trigger, action, dumper
 
 
 BINARY_SENSOR_REGISTRY = Registry(binary_sensor.BINARY_SENSOR_SCHEMA.extend({
     cv.GenerateID(CONF_RECEIVER_ID): cv.use_id(RemoteReceiverBase),
 }))
+SENSOR_REGISTRY = Registry(sensor.SENSOR_SCHEMA.extend({
+    cv.GenerateID(CONF_RECEIVER_ID): cv.use_id(RemoteReceiverBase),
+    cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(UNIT_CELSIUS, ICON_THERMOMETER, 1),
+    cv.Optional(CONF_HUMIDITY): sensor.sensor_schema(UNIT_PERCENT, ICON_WATER_PERCENT, 0),
+}))
 validate_binary_sensor = cv.validate_registry_entry('remote receiver', BINARY_SENSOR_REGISTRY)
+validate_sensor = cv.validate_registry_entry('remote receiver', SENSOR_REGISTRY)
 TRIGGER_REGISTRY = SimpleRegistry()
 DUMPER_REGISTRY = Registry({
     cv.GenerateID(CONF_RECEIVER_ID): cv.use_id(RemoteReceiverBase),
@@ -170,6 +184,17 @@ def build_binary_sensor(full_config):
     yield builder(var, config)
     yield var
 
+@coroutine
+def build_sensor(full_config):
+    registry_entry, config = cg.extract_registry_entry_config(SENSOR_REGISTRY, full_config)
+    type_id = full_config[CONF_TYPE_ID]
+    builder = registry_entry.coroutine_fun
+    var = cg.new_Pvariable(type_id)
+    yield cg.register_component(var, full_config)
+    yield register_listener(var, full_config)
+    yield builder(var, config)
+    yield var
+
 
 @coroutine
 def build_triggers(full_config):
@@ -191,7 +216,7 @@ def build_dumpers(config):
 
 
 # JVC
-JVCData, JVCBinarySensor, JVCTrigger, JVCAction, JVCDumper = declare_protocol('JVC')
+JVCData, JVCBinarySensor, JVCSensor, JVCTrigger, JVCAction, JVCDumper = declare_protocol('JVC')
 JVC_SCHEMA = cv.Schema({cv.Required(CONF_DATA): cv.hex_uint32_t})
 
 
@@ -220,7 +245,7 @@ def jvc_action(var, config, args):
 
 
 # LG
-LGData, LGBinarySensor, LGTrigger, LGAction, LGDumper = declare_protocol('LG')
+LGData, LGBinarySensor,LGSensor, LGTrigger, LGAction, LGDumper = declare_protocol('LG')
 LG_SCHEMA = cv.Schema({
     cv.Required(CONF_DATA): cv.hex_uint32_t,
     cv.Optional(CONF_NBITS, default=28): cv.one_of(28, 32, int=True),
@@ -253,9 +278,43 @@ def lg_action(var, config, args):
     template_ = yield cg.templatable(config[CONF_NBITS], args, cg.uint8)
     cg.add(var.set_nbits(template_))
 
+#DIGOO
+DIGOOData, DIGOOBinarySensor,DIGOOSensor, DIGOOTrigger, DIGOOAction, DIGOODumper = declare_protocol('DIGOO')
+DIGOO_SCHEMA = cv.Schema({
+    cv.Required(CONF_DATA): cv.hex_uint32_t,
+    cv.Optional(CONF_NBITS, default=37): cv.one_of(37, 32, int=True),
+})
+
+
+@register_sensor('digoo', DIGOOSensor, DIGOO_SCHEMA)
+def digoo_sensor(var, config):
+    cg.add(var.set_data(cg.StructInitializer(
+        DIGOOData,
+        ('data', config[CONF_DATA]),
+        ('nbits', config[CONF_NBITS]),
+    )))
+
+
+@register_trigger('digoo', DIGOOTrigger, DIGOOData)
+def digoo_trigger(var, config):
+    pass
+
+
+@register_dumper('digoo', DIGOODumper)
+def digoo_dumper(var, config):
+    pass
+
+
+@register_action('digoo', DIGOOAction, DIGOO_SCHEMA)
+def digoo_action(var, config, args):
+    template_ = yield cg.templatable(config[CONF_DATA], args, cg.uint32)
+    cg.add(var.set_data(template_))
+    template_ = yield cg.templatable(config[CONF_NBITS], args, cg.uint8)
+    cg.add(var.set_nbits(template_))
+
 
 # NEC
-NECData, NECBinarySensor, NECTrigger, NECAction, NECDumper = declare_protocol('NEC')
+NECData, NECBinarySensor,NECSensor, NECTrigger, NECAction, NECDumper = declare_protocol('NEC')
 NEC_SCHEMA = cv.Schema({
     cv.Required(CONF_ADDRESS): cv.hex_uint16_t,
     cv.Required(CONF_COMMAND): cv.hex_uint16_t,
@@ -290,7 +349,7 @@ def nec_action(var, config, args):
 
 
 # Sony
-SonyData, SonyBinarySensor, SonyTrigger, SonyAction, SonyDumper = declare_protocol('Sony')
+SonyData, SonyBinarySensor,SONYSensor, SonyTrigger, SonyAction, SonyDumper = declare_protocol('Sony')
 SONY_SCHEMA = cv.Schema({
     cv.Required(CONF_DATA): cv.hex_uint32_t,
     cv.Optional(CONF_NBITS, default=12): cv.one_of(12, 15, 20, int=True),
@@ -338,7 +397,7 @@ def validate_raw_alternating(value):
     return value
 
 
-RawData, RawBinarySensor, RawTrigger, RawAction, RawDumper = declare_protocol('Raw')
+RawData, RawBinarySensor, RawSensor, RawTrigger, RawAction, RawDumper = declare_protocol('Raw')
 CONF_CODE_STORAGE_ID = 'code_storage_id'
 RAW_SCHEMA = cv.Schema({
     cv.Required(CONF_CODE): cv.All([cv.Any(cv.int_, cv.time_period_microseconds)],
@@ -382,7 +441,7 @@ def raw_action(var, config, args):
 
 
 # RC5
-RC5Data, RC5BinarySensor, RC5Trigger, RC5Action, RC5Dumper = declare_protocol('RC5')
+RC5Data, RC5BinarySensor,RC5Sensor, RC5Trigger, RC5Action, RC5Dumper = declare_protocol('RC5')
 RC5_SCHEMA = cv.Schema({
     cv.Required(CONF_ADDRESS): cv.All(cv.hex_int, cv.Range(min=0, max=0x1F)),
     cv.Required(CONF_COMMAND): cv.All(cv.hex_int, cv.Range(min=0, max=0x3F)),
@@ -613,7 +672,7 @@ def rc_switch_dumper(var, config):
 
 
 # Samsung
-(SamsungData, SamsungBinarySensor, SamsungTrigger, SamsungAction,
+(SamsungData, SamsungBinarySensor, SamsungSensor, SamsungTrigger, SamsungAction,
  SamsungDumper) = declare_protocol('Samsung')
 SAMSUNG_SCHEMA = cv.Schema({
     cv.Required(CONF_DATA): cv.hex_uint32_t,
@@ -645,7 +704,7 @@ def samsung_action(var, config, args):
 
 
 # Panasonic
-(PanasonicData, PanasonicBinarySensor, PanasonicTrigger, PanasonicAction,
+(PanasonicData, PanasonicBinarySensor, PanassonicSensor, PanasonicTrigger, PanasonicAction,
  PanasonicDumper) = declare_protocol('Panasonic')
 PANASONIC_SCHEMA = cv.Schema({
     cv.Required(CONF_ADDRESS): cv.hex_uint16_t,

@@ -29,6 +29,28 @@ class RawBinarySensor : public RemoteReceiverBinarySensorBase {
   size_t len_;
 };
 
+class RawSensor : public RemoteReceiverSensorBase {
+public:
+    bool matches(RemoteReceiveData src) override {
+        for (size_t i = 0; i < this->len_; i++) {
+            auto val = this->data_[i];
+            if (val < 0) {
+                if (!src.expect_space(static_cast<uint32_t>(-val)))
+                    return false;
+            } else {
+                if (!src.expect_mark(static_cast<uint32_t>(val)))
+                    return false;
+            }
+        }
+        return true;
+    }
+    void set_data(const int32_t *data) { data_ = data; }
+    void set_len(size_t len) { len_ = len; }
+protected:
+    const int32_t *data_;
+    size_t len_;
+};
+
 class RawTrigger : public Trigger<std::vector<int32_t>>, public Component, public RemoteReceiverListener {
  protected:
   bool on_receive(RemoteReceiveData src) override {
